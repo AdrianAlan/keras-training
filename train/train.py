@@ -3,10 +3,12 @@ from __future__ import print_function
 import numpy as np
 np.random.seed(42)
 
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 import h5py
 import json
 import models
-import os
 import pandas as pd
 import shutil
 import sys
@@ -151,6 +153,8 @@ if __name__ == "__main__":
     (options,args) = parser.parse_args()
      
     yamlConfig = parse_config(options.config)
+
+    tf.get_logger().setLevel('ERROR')
    
     if os.path.isdir(options.outputDir):
         #raise Exception('output directory must not exist yet')
