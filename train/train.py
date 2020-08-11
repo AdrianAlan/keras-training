@@ -37,9 +37,6 @@ def get_features(options, yamlConfig):
     h5File = h5py.File(options.inputFile)
     treeArray = h5File[options.tree][()]
 
-    print(treeArray.shape)
-    print(treeArray.dtype.names)
-    
     # List of features to use
     features = yamlConfig['Inputs']
     
@@ -64,7 +61,6 @@ def get_features(options, yamlConfig):
         features_val = features_val[:,:-1] # drop the j_index feature
     if 'j_index' in labels:
         labels_val = labels_val[:,:-1] # drop the j_index label
-        print(labels_val.shape)
 
     if yamlConfig['InputType']=='Conv1D':
         features_2dval = np.zeros((len(labels_df), yamlConfig['MaxParticles'], len(features)-1))
@@ -133,8 +129,6 @@ def get_features(options, yamlConfig):
 
 ## Config module
 def parse_config(config_file) :
-
-    print("Loading configuration from", config_file)
     config = open(config_file, 'r')
     return yaml.load(config)
 
