@@ -1,33 +1,32 @@
 from __future__ import print_function
-import sys
-import os
-import numpy as np
-import json
-# fix random seed for reproducibility
-seed = 42
-np.random.seed(seed)
-import tensorflow.keras as keras
-from optparse import OptionParser
-import h5py
-from tensorflow.keras.optimizers import Adam, Nadam
-import tensorflow as tf
-from callbacks import all_callbacks
-import pandas as pd
-from tensorflow.keras.layers import Input
-from sklearn.model_selection import train_test_split
-from sklearn import preprocessing
-import shutil
-import yaml
-import models
-from qkeras.autoqkeras import *
 
+import numpy as np
+np.random.seed(42)
+
+import h5py
+import json
+import models
+import os
+import pandas as pd
+import shutil
+import sys
+import tensorflow.keras as keras
+import tensorflow as tf
+import yaml
+
+from callbacks import all_callbacks
+from optparse import OptionParser
+from qkeras.autoqkeras import *
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.layers import Input
 
 # To turn off GPU
 #os.environ['CUDA_VISIBLE_DEVICES'] = ''
 def print_model_to_json(keras_model, outfile_name):
     outfile = open(outfile_name,'w')
     jsonString = keras_model.to_json()
-    import json
     with outfile:
         obj = json.loads(jsonString)
         json.dump(obj, outfile, sort_keys=True,indent=4, separators=(',', ': '))
@@ -110,13 +109,13 @@ def get_features(options, yamlConfig):
     
     #Normalize inputs
     if yamlConfig['NormalizeInputs'] and yamlConfig['InputType']!='Conv1D' and yamlConfig['InputType']!='Conv2D':
-        scaler = preprocessing.StandardScaler().fit(X_train_val)
+        scaler = StandardScaler().fit(X_train_val)
         X_train_val = scaler.transform(X_train_val)
         X_test = scaler.transform(X_test)
 
     #Normalize inputs
     if yamlConfig['NormalizeInputs'] and yamlConfig['InputType']!='Conv1D' and yamlConfig['InputType']!='Conv2D' and yamlConfig['KerasLoss']=='squared_hinge':
-        scaler = preprocessing.MinMaxScaler().fit(X_train_val)
+        scaler = MinMaxScaler().fit(X_train_val)
         X_train_val = scaler.transform(X_train_val)
         X_test = scaler.transform(X_test)
         y_train_val = y_train_val * 2 - 1
@@ -125,7 +124,7 @@ def get_features(options, yamlConfig):
     #Normalize conv inputs
     if yamlConfig['NormalizeInputs'] and yamlConfig['InputType']=='Conv1D':
         reshape_X_train_val = X_train_val.reshape(X_train_val.shape[0]*X_train_val.shape[1],X_train_val.shape[2])
-        scaler = preprocessing.StandardScaler().fit(reshape_X_train_val)
+        scaler = StandardScaler().fit(reshape_X_train_val)
         for p in range(X_train_val.shape[1]):
             X_train_val[:,p,:] = scaler.transform(X_train_val[:,p,:])
             X_test[:,p,:] = scaler.transform(X_test[:,p,:])    
