@@ -24,8 +24,6 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.layers import Input
 
-# To turn off GPU
-#os.environ['CUDA_VISIBLE_DEVICES'] = ''
 def print_model_to_json(keras_model, outfile_name):
     outfile = open(outfile_name,'w')
     jsonString = keras_model.to_json()
@@ -73,12 +71,9 @@ def get_features(options, yamlConfig):
         for i in range(0, len(labels_df)):
             features_df_i = features_df[features_df['j_index']==labels_df['j_index'].iloc[i]]
             index_values = features_df_i.index.values
-            #features_val_i = features_val[index_values[0]:index_values[-1]+1,:-1] # drop the last feature j_index
             features_val_i = features_val[np.array(index_values),:]
             nParticles = len(features_val_i)
-            #print("before", features_val_i[:,0])
             features_val_i = features_val_i[features_val_i[:,0].argsort()[::-1]] # sort descending by first value (ptrel, usually)
-            #print("after", features_val_i[:,0])
             if nParticles>yamlConfig['MaxParticles']:
                 features_val_i =  features_val_i[0:yamlConfig['MaxParticles'],:]
             else:        
@@ -157,14 +152,12 @@ if __name__ == "__main__":
     tf.get_logger().setLevel('ERROR')
    
     if os.path.isdir(options.outputDir):
-        #raise Exception('output directory must not exist yet')
         input("Warning: output directory exists. Press Enter to continue...")
         shutil.rmtree(options.outputDir)
     os.mkdir(options.outputDir)
  
     X_train_val, X_test, y_train_val, y_test, labels  = get_features(options, yamlConfig)
     
-    #from models import three_layer_model
     model = getattr(models, yamlConfig['KerasModel'])    
     if 'L1RegR' in yamlConfig:
         keras_model = model(Input(shape=X_train_val.shape[1:]), y_train_val.shape[1], l1Reg=yamlConfig['L1Reg'], l1RegR=yamlConfig['L1RegR'] )
