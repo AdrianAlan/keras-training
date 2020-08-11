@@ -108,7 +108,7 @@ def get_features(options, yamlConfig):
     X_train_val, X_test, y_train_val, y_test = train_test_split(features_val, labels_val, test_size=0.2, random_state=42)
     
     #Normalize inputs
-    if yamlConfig['NormalizeInputs'] and yamlConfig['InputType']!='Conv1D' and yamlConfig['InputType']!='Conv2D':
+    if yamlConfig['NormalizeInputs'] and yamlConfig['InputType']!='Conv1D' and yamlConfig['InputType']!='Conv2D' and yamlConfig['KerasLoss']!='squared_hinge':
         scaler = StandardScaler().fit(X_train_val)
         X_train_val = scaler.transform(X_train_val)
         X_test = scaler.transform(X_test)
