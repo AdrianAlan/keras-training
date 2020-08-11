@@ -1,21 +1,26 @@
 from __future__ import print_function
 import sys
 import os
-import keras
 import numpy as np
+import json
 # fix random seed for reproducibility
 seed = 42
 np.random.seed(seed)
+import tensorflow.keras as keras
 from optparse import OptionParser
 import h5py
-from keras.optimizers import Adam, Nadam
+from tensorflow.keras.optimizers import Adam, Nadam
+import tensorflow as tf
 from callbacks import all_callbacks
 import pandas as pd
-from keras.layers import Input
+from tensorflow.keras.layers import Input
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
+import shutil
 import yaml
 import models
+from qkeras.autoqkeras import *
+
 
 # To turn off GPU
 #os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -143,16 +148,17 @@ if __name__ == "__main__":
     parser.add_option('-t','--tree'   ,action='store',type='string',dest='tree'   ,default='t_allpar_new', help='tree name')
     parser.add_option('-o','--output'   ,action='store',type='string',dest='outputDir'   ,default='train_simple/', help='output directory')
     parser.add_option('-c','--config'   ,action='store',type='string', dest='config', default='train_config_threelayer.yml', help='configuration file')
+    parser.add_option('-q', '--autoq-config', action='store', type='string', dest='autoq_config', help='AutoQKeras configuration file')
     (options,args) = parser.parse_args()
      
     yamlConfig = parse_config(options.config)
-    
+   
     if os.path.isdir(options.outputDir):
         #raise Exception('output directory must not exist yet')
-        raw_input("Warning: output directory exists. Press Enter to continue...")
-    else:
-        os.mkdir(options.outputDir)
-
+        input("Warning: output directory exists. Press Enter to continue...")
+        shutil.rmtree(options.outputDir)
+    os.mkdir(options.outputDir)
+ 
     X_train_val, X_test, y_train_val, y_test, labels  = get_features(options, yamlConfig)
     
     #from models import three_layer_model
@@ -164,18 +170,38 @@ if __name__ == "__main__":
 
     print_model_to_json(keras_model,options.outputDir + '/' + 'KERAS_model.json')
 
-    startlearningrate=0.0001
+    startlearningrate=0.002
     adam = Adam(lr=startlearningrate)
-    keras_model.compile(optimizer=adam, loss=[yamlConfig['KerasLoss']], metrics=['accuracy'])
+    metrics = [tf.keras.metrics.AUC(), 'accuracy']
+    keras_model.compile(optimizer=adam, loss=[yamlConfig['KerasLoss']], metrics=metrics)
+    with open(options.autoq_config, 'r') as f:
+        run_config = json.load(f)
+    run_config["output_dir"] = options.outputDir + "/autoq"
 
-        
-    callbacks=all_callbacks(stop_patience=1000, 
+    custom_objects = {}
+    if "blocks" in run_config:
+      autoqk = AutoQKerasScheduler(
+          keras_model, metrics, custom_objects, debug=0, **run_config)
+    else:
+      # in debug mode we do not run AutoQKeras, just the sequential scheduler.
+      autoqk = AutoQKeras(keras_model, metrics, custom_objects, **run_config)
+
+
+    x_train = X_train_val[0:40000]
+    y_train = y_train_val[0:40000]
+
+    autoqk.fit(x_train, y_train, batch_size=1024, epochs=60,
+               validation_split = 0.25, shuffle = True)
+    qmodel = autoqk.get_best_model()
+    save_quantization_dict("cern-bits.dict", qmodel)
+    callbacks=all_callbacks(stop_patience=1000,
                             lr_factor=0.5,
                             lr_patience=10,
-                            lr_epsilon=0.000001, 
-                            lr_cooldown=2, 
+                            lr_epsilon=0.000001,
+                            lr_cooldown=2,
                             lr_minimum=0.0000001,
                             outputDir=options.outputDir)
-
-    keras_model.fit(X_train_val, y_train_val, batch_size = 1024, epochs = 100,
-                    validation_split = 0.25, shuffle = True, callbacks = callbacks.callbacks)
+    qmodel.fit(
+        X_train_val, y_train_val, batch_size=1024, epochs=1000,
+        validation_split = 0.25, shuffle = True, callbacks=callbacks.callbacks)
+    qmodel.save("optimized.h5")
