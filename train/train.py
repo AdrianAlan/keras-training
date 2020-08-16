@@ -8,18 +8,22 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import h5py
 import json
+import matplotlib.pyplot as plt
 import models
 import pandas as pd
-import shutil
 import sys
 import tensorflow.keras as keras
 import tensorflow as tf
 import yaml
 
 from callbacks import all_callbacks
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from optparse import OptionParser
 from qkeras.autoqkeras import *
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_curve, auc
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.layers import Input
@@ -93,7 +97,6 @@ def get_features(options, yamlConfig):
         for i in range(0, len(labels_df)):
             features_df_i = features_df[(features_df['j_index'] ==
                                          labels_df['j_index'].iloc[i])]
-            index_values = features_df_i.index.value
 
             xbins = np.linspace(yamlConfig['MinX'],
                                 yamlConfig['MaxX'],
@@ -167,17 +170,32 @@ if __name__ == "__main__":
     parser.add_option('-q', '--autoq-config',
                       action='store', type='string', dest='autoq_config',
                       help='Path tp AutoQKeras configuration')
+    parser.add_option('-r', '--learaning-rate',
+                      action='store', type='float', dest='start_lr',
+                      default=.002, help='Start learning rate')
+    parser.add_option('-b', '--batch-size',
+                      action='store', type='int', dest='batch_size',
+                      default=1024, help='Batch size')
+    parser.add_option('-e', '--epochs',
+                      action='store', type='int', dest='epochs',
+                      default=60, help='Number of epochs')
+    parser.add_option('-v', '--validation-split',
+                      action='store', type='float', dest='validation_split',
+                      default=.25, help='Validation split')
     (options, args) = parser.parse_args()
 
     yamlConfig = parse_config(options.config)
 
     tf.get_logger().setLevel('ERROR')
 
-    if os.path.isdir(options.outputDir):
-        shutil.rmtree(options.outputDir)
-    os.mkdir(options.outputDir)
+    # Parameters to scan
+    STRESS = np.arange(1, 6)
+    RATE = np.arange(2, 6)
 
-    X_train, _, y_train, _, _ = get_features(options, yamlConfig)
+    if not os.path.isdir(options.outputDir):
+        os.mkdir(options.outputDir)
+
+    X_train, X_test, y_train, y_test, _ = get_features(options, yamlConfig)
 
     model = getattr(models, yamlConfig['KerasModel'])
     if 'L1RegR' in yamlConfig:
@@ -190,49 +208,97 @@ if __name__ == "__main__":
                             y_train.shape[1],
                             l1Reg=yamlConfig['L1Reg'])
 
-    print_model_to_json(keras_model, options.outputDir + '/KERAS_model.json')
+    print_model_to_json(keras_model, options.outputDir + '/model.json')
 
-    startlearningrate = 0.002
-    adam = Adam(lr=startlearningrate)
+    optimizer = Adam(lr=options.start_lr)
     metrics = [tf.keras.metrics.AUC(), 'accuracy']
     loss = [yamlConfig['KerasLoss']]
 
-    keras_model.compile(optimizer=adam, loss=loss, metrics=metrics)
-
+    keras_model.compile(optimizer=optimizer,
+                        loss=loss,
+                        metrics=metrics)
     with open(options.autoq_config, 'r') as f:
         run_config = json.load(f)
-    run_config["output_dir"] = options.outputDir + "/autoq"
 
-    custom_objects = {}
-    if "blocks" in run_config:
-        autoqk = AutoQKerasScheduler(keras_model, metrics, custom_objects,
-                                     debug=0, **run_config)
-    else:
-        autoqk = AutoQKeras(keras_model, metrics, custom_objects, **run_config)
+    foo = []
+    for r in RATE:
+        foo2 = []
+        for stress in STRESS:
+            run_config["output_dir"] = "%s/autoq%s-%s" % (options.outputDir,
+                                                          r, s)
+            run_config["goal"]["params"]["rate"] = r
+            run_config["goal"]["params"]["stress"] = s
+            autoqk = AutoQKerasScheduler(keras_model, metrics, {}, debug=0,
+                                         **run_config)
+            autoqk.fit(X_train[0:40000],
+                       y_train[0:40000],
+                       batch_size=options.batch_size,
+                       epochs=options.epochs,
+                       validation_split=options.validation_split,
+                       shuffle=True)
 
-    autoqk.fit(X_train[0:40000],
-               y_train[0:40000],
-               batch_size=1024,
-               epochs=60,
-               validation_split=0.25,
-               shuffle=True)
-    qmodel = autoqk.get_best_model()
+            qmodel = autoqk.get_best_model()
+            callbacks = all_callbacks(stop_patience=1000,
+                                      lr_factor=0.5,
+                                      lr_patience=10,
+                                      lr_epsilon=0.000001,
+                                      lr_cooldown=2,
+                                      lr_minimum=0.0000001,
+                                      outputDir=options.outputDir)
+            qmodel.fit(X_train,
+                       y_train,
+                       batch_size=options.batch_size,
+                       epochs=50,
+                       validation_split=options.validation_split,
+                       shuffle=True,
+                       callbacks=callbacks.callbacks)
 
-    callbacks = all_callbacks(stop_patience=1000,
-                              lr_factor=0.5,
-                              lr_patience=10,
-                              lr_epsilon=0.000001,
-                              lr_cooldown=2,
-                              lr_minimum=0.0000001,
-                              outputDir=options.outputDir)
+            save_quantization_dict('%s/optimized%s-%s.dict' %
+                                   (options.outputDir, r, s), qmodel)
+            qmodel.save('%s/optimized%s-%s.h5' % (options.outputDir, r, s))
 
-    qmodel.fit(X_train,
-               y_train,
-               batch_size=1024,
-               epochs=1000,
-               validation_split=0.25,
-               shuffle=True,
-               callbacks=callbacks.callbacks)
+            y_pred = qmodel(X_test)
+            for i in range(5):
+                fpr, tpr, _ = roc_curve(y_test[:, i], y_pred[:, i])
+                aucs.append(auc(fpr, tpr))
 
-    save_quantization_dict("optimized.dict", qmodel)
-    qmodel.save("optimized.h5")
+            foo2.append((autoqk.get_best_model_stats(), np.mean(aucs)))
+        foo.append(foo2)
+
+    # Plot the results
+    plt.style.use('../plotting/hls.mplstyle')
+
+    def get_logo():
+        return OffsetImage(plt.imread('../plotting/hls4mllogo.jpg',
+                                      format='jpg'),
+                           zoom=0.08)
+
+    with open('../plotting/palette.json') as json_file:
+        palette = json.load(json_file)
+
+    colors = ['indigo', 'orange', 'red', 'green']
+    markers = ["o", "v", "*", "D", "P"]
+
+    fig, ax = plt.subplots()
+    for r, _rate in enumerate(foo):
+        for s, _stress in enumerate(_rate):
+            ax.scatter(_stress[0], _stress[1],
+                       c=palette[colors[r]]['shade_500'],
+                       marker=markers[s],
+                       s=12)
+    legend_elements = []
+    for r in RATE:
+        legend_elements.append(Patch(fc=palette[colors[r-2]]['shade_300'],
+                                     label='Rate=%s' % r))
+    for s in STRESS:
+        legend_elements.append(Line2D([0], [0], marker=markers[s-1], color='w',
+                               mfc=palette['grey']['shade_700'],
+                               label='Stress=%s' % s, markersize=8))
+
+    ax.legend(handles=legend_elements, loc='right', bbox_to_anchor=(1.3, 0.5))
+    ax.text(0, 1.02, 'CMS', weight='bold', transform=ax.transAxes,
+            color=palette['grey']['shade_900'], fontsize=13)
+    ab = AnnotationBbox(get_logo(),
+                        xy=(ax.get_xlim()[0], ax.get_ylim()[1]),
+                        box_alignment=(-0.5, 0.15), frameon=False)
+    ax.add_artist(ab)
